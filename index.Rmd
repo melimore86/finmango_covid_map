@@ -5,5 +5,141 @@ date: "`r Sys.Date()`"
 site: bookdown::bookdown_site
 ---
 
-# Down the rabbit-hole
+# FinMango Covid Map
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, messages= FALSE, warning= FALSE, comment=NA)
+library("leaflet")
+library("geojsonio")
+library("sp")
+library("htmlwidgets")
+library("tidyverse")
+library("stringr")
+library("dplyr")
+library("htmltools")
+library("sf")
+library("maps")
+library("rgeos")
+
+```
+
+
+```{r include= FALSE}
+index<- read.csv("data/index.csv", header= TRUE, na.strings=c("","NA"))
+vax<- read.csv("data/vaccinations.csv", header= TRUE, na.strings=c("","NA"))
+
+key<- full_join(vax, index, by = "location_key")
+
+total_full_vax<-key %>% 
+  group_by(location_key) %>% 
+  summarise(total_full_vax = sum(total_persons_fully_vaccinated)) %>% 
+  na.omit(total_full_vax)
+
+total_vax<-key %>% 
+  group_by(location_key) %>% 
+  summarise(total_vax = sum(total_persons_vaccinated)) %>% 
+  na.omit(total_vax)
+
+vax_all<- full_join(total_vax, total_full_vax, by = "location_key")
+
+edited_key<-key %>% 
+  select(country_name, location_key, subregion1_name)
+
+vax_key<-full_join(vax_all, edited_key, by = "location_key")
+
+vax_key<- distinct(vax_key)
+
+vax_key$country_name<-as.character(tools::toTitleCase(vax_key$country_name))
+
+vax_key$subregion1_name<-as.character(tools::toTitleCase(vax_key$subregion1_name))
+
+vax_key$total_vax[is.na(vax_key$total_vax)] <- 0
+
+vax_sum<-vax_key %>% 
+  group_by(country_name) %>% 
+  summarize(total= sum(total_vax)) %>% 
+  na.omit(total_vax) 
+
+vax_sum_sub<-vax_key %>% 
+  group_by(subregion1_name) %>% 
+  summarize(total_sub= sum(total_vax)) %>% 
+  na.omit(total_vax)
+
+vax_sum_sub_count<- merge(vax_key, vax_sum_sub)  
+
+vax_sum_sub_count <- vax_sum_sub_count %>% 
+  select(subregion1_name, country_name, total_sub) %>% 
+  na.omit(subregion1_name) %>% 
+  distinct()  
+
+colnames(vax_sum) <- c("name", "total")
+
+colnames(vax_sum_sub_count) <- c("subregion", "name", "total_sub")
+
+x <- "https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json"
+geojson_read(x, what = "sp")
+#geojson_read(x, what = "list")
+
+utils::download.file(x, destfile = basename(x))
+countries<-geojson_read(basename(x), what = "sp")
+
+countries_vax<- merge(countries, vax_sum, duplicateGeoms = TRUE,no.dups = FALSE)
+
+#sub_vax<- merge(countries_vax, vax_sum_sub_count, by = "name", duplicateGeoms = TRUE,no.dups = FALSE)
+
+#sub_vax$sci<- formatC(sub_vax$total, format = "e", digits = 7)
+
+bins <- c(0, 10000, 20000, 50000, 1000000, 2000000, 5000000, 10000000, Inf)
+
+pal <- colorBin("YlOrRd", domain = countries_vax$total, bins = bins)
+
+
+#create the custom labels by country
+all_vax<- merge(vax_sum_sub_count, vax_sum)
+
+df.helper <- all_vax[ !duplicated( all_vax$name),  ]
+
+
+custom.labels <- lapply( seq( nrow( df.helper ) ), function(i) {
+  paste0( '<p><b>', df.helper[i, "name" ], '</b><br></p><p>',
+          paste( all_vax[which(all_vax$name == df.helper[i, "name"]), "subregion"],
+                 all_vax[which(all_vax$name == df.helper[i, "name"]), "total_sub"],
+                 sep = " - ", collapse="<br>"), 
+          '</p>' ) 
+})
+
+
+### Getting centroid of polygon
+ctrs <- lapply(unique(countries_vax$name), 
+               function(x) gCentroid(SpatialPoints(countries_vax[countries_vax$name==x,])))
+ctrsout <- setNames( ctrs , unique(countries_vax$name ) )
+
+centroid_df <- do.call(rbind, lapply(ctrsout, data.frame, stringsAsFactors=FALSE))
+uniq_logical <- !duplicated(countries_vax$name )
+centroid_df$name <- countries_vax$name[uniq_logical]
+names(centroid_df) <- c("longitude", "latitude", "name")
+
+vax<- merge(df.helper, centroid_df)
+
+
+covid_map<- 
+leaflet(vax) %>%
+  addProviderTiles("OpenStreetMap") %>% 
+    addCircleMarkers(
+      lng = ~vax$longitude, 
+      lat = ~vax$latitude, 
+      popup= ~paste(
+          "<strong> Country: </strong>","<br>", vax$name, "<br>",
+          "<strong> Total vaccinated </strong>","<br>", 
+          prettyNum(vax$total, big.mark = ","),
+        lapply(custom.labels, htmltools::HTML)) ) 
+
+
+
+```
+
+```{r echo= FALSE}
+covid_map
+
+```
 
